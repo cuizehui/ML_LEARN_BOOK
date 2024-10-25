@@ -1,4 +1,5 @@
 # 数据操作
+from multiprocessing import reduction
 import numpy as np
 import math 
 # 读取，写入
@@ -50,11 +51,12 @@ def select_feature(train_data,valid_data,test_data,select_all=True):
     # 去掉label的数据
     raw_x_train = train_data[:,:-1]
     raw_x_valid = valid_data[:,:-1]
-    raw_x_test = test_data[:,:-1]
+    raw_x_test = test_data  ## 测试集无结果，不去除label
 
     if select_all:
         #`shape` 不是一个函数，而是 NumPy 数组（`numpy.ndarray`）的一个属性。NumPy 是一个用于科学计算的 Python 库，`shape` 属性用于获取数组的维度信息。
         feat_idx=list(range(raw_x_train.shape[1]))
+        print("feat_idx" ,feat_idx)
     else :
         feat_idx=[0,1,2,3,4]
     #返回训练集特征，返回验证集特征，返回测试集特征，返回训练集标签（预测结果），返回验证集标签（预测结果）
@@ -90,13 +92,13 @@ class MyModle(nn.Module):
         def __init__(self, input_dim):
             super(MyModle, self).__init__()
             # 定义层
-            self.layers = nn.Sequential{
+            self.layers = nn.Sequential(
                 nn.Linear(input_dim, 16),
                 nn.ReLU(), 
                 nn.Linear(16, 8),
                 nn.ReLU(),
                 nn.Linear(8, 1)
-            }
+            )
             #`nn.Sequential` 是一个有序容器，允许你将多个层按顺序组合在一起。输入数据会按顺序通过这些层。
             # nn.Linear` 是 PyTorch 中定义全连接层（或线性层）的模块。全连接层是神经网络的基本构建块之一，主要用于将输入数据进行线性变换
             # 在 PyTorch 中，当你定义一个线性层（例如 `nn.Linear`）时，该层会自动创建和初始化权重矩阵和偏置向量。这些参数存储在 `nn.Linear` 对象的属性中：
@@ -112,7 +114,7 @@ class MyModle(nn.Module):
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 config = {
-'seed':1122408,
+'seed':5201314,
 'select_all' : True,
 'valid_ratio':0.2,
 'n_epochs' : 3000, #循环次数
@@ -121,3 +123,119 @@ config = {
 'early_stop': 400, #早停次数
 'save_path' : './models/model.ckpt'
 }
+
+#训练
+
+
+# step1. 定义损失函数
+
+
+def trainer(train_loader, valid_loader,model,config,device):
+    # mean表示平均值， 平方差的均值
+    criterion = nn.MSELoss(reduction='mean')
+    # 初始化优化器 PyTorch 中的随机梯度下降优化器（SGD），用于更新模型的参数以最小化损失函数。
+    # model.parameters()`：获取模型中所有需要优化的参数。
+
+    optimizer = torch.optim.SGD(model.parameters(),lr=config['learning_rate'],momentum=0.9)
+    #数据可视化
+    writer = SummaryWriter()
+
+    # 模型保存路径
+    if not os.path.isdir('./models'):
+        os.mkdir('./models')
+    
+    n_epochs =  config['n_epochs']
+    #记录最小损失
+    best_loss = math.inf
+    # 记录训练步数
+    step = 0
+    # 记录早停次数
+    early_stop_count = 0
+
+    for epoch in range(n_epochs):
+        model.train() # ？？
+        train_loss = []
+        # train_pbar = tqdm() 进度条可视化
+        for x,y in train_loader:
+            # 数据传入模型
+            x,y = x.to(device),y.to(device)
+            # 梯度清零
+            optimizer.zero_grad()
+            # 模型预测
+            y_pred = model(x)
+            # 计算损失
+            loss = criterion(y_pred,y)
+            loss.backward()
+            # 梯度更新
+            optimizer.step()
+            # 参数更新步数
+            step += 1
+            # 记录损失
+            train_loss.append(loss.detach().item())
+            # 数据可视化
+            writer.add_scalar('Loss/train',loss.item(),step)
+        #平均损失    
+        mean_train_loss = sum(train_loss)/len(train_loss)
+        
+    # 模型验证
+    model.eval()
+    valid_loss = []
+    for x,y in valid_loader:
+        x,y = x.to(device),y.to(device)
+        # 模型预测
+        y_pred = model(x)
+        # 计算损失
+        loss = criterion(y_pred,y)
+        # 记录损失
+        valid_loss.append(loss.detach().item())
+    #平均损失
+    mean_valid_loss = sum(valid_loss)/len(valid_loss)
+
+    if mean_valid_loss < best_loss:
+        best_loss = mean_valid_loss
+        # 保存模型
+        torch.save(model.state_dict(),config['save_path'])
+        print('Saving model with loss {:.3f}...'.format(best_loss))
+        early_stop_count = 0
+    else:
+        early_stop_count += 1    
+
+    if early_stop_count >= config['early_stop']:
+        print('\nModel is not improving, so we halt the training session.')
+        return
+    
+
+
+#设置随机种子
+
+same_seed(config['seed'])
+
+train_data= pd.read_csv('./covid.train.csv').values
+test_data= pd.read_csv('./covid.test.csv').values
+
+train_set ,valid_set =train_valid_split(train_data,config["valid_ratio"],config["seed"])
+print("train_set size: {}".format(train_set.shape))
+print("valid_set size: {}".format(valid_set.shape))
+
+# 选择特征
+raw_x_train,raw_x_valid,raw_x_test ,raw_y_train ,raw_y_valid =select_feature(train_set,valid_set,test_data,config["select_all"])
+print("raw_x_train:", raw_x_train)
+print("raw_x_valid:", raw_x_valid)
+print("raw_x_test:", raw_x_test)
+print("raw_y_train:", raw_y_train)
+print("raw_y_valid:", raw_y_valid)
+#准备dataset
+
+train_dataset = COVID19Dataset(raw_x_train,raw_y_train,mode='train')
+test_dataset = COVID19Dataset(raw_x_valid,raw_y_valid,mode='train')
+valid_dataset = COVID19Dataset(raw_x_test,mode='test')
+
+# 准备dataloader
+
+train_dataloader =DataLoader(train_dataset,config['batch_size'],shuffle=True,drop_last=True)
+valid_dataloader =DataLoader(train_dataset,config['batch_size'],shuffle=True,drop_last=True)
+test_dataloader =DataLoader(train_dataset,config['batch_size'],shuffle=True,drop_last=True)
+
+modle = MyModle(input_dim=raw_x_train.shape[1])
+
+trainer(train_dataloader,valid_dataloader,modle,config,device)
