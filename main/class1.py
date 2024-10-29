@@ -13,7 +13,7 @@ import torch.utils.data
 from torch.utils.data import Dataset,DataLoader,random_split
 # 绘制图像
 from   torch.utils.tensorboard import SummaryWriter
-
+from tqdm import tqdm
 
 ## 确定随机种子，保证每次结果相同
 def same_seed(seed):
@@ -72,7 +72,7 @@ class COVID19Dataset(Dataset):
         else:   
             self.targets = torch.FloatTensor(targets)
         self.features = torch.FloatTensor(features)
-
+        #`torch.FloatTensor` 是 PyTorch 中的一种数据类型，用于表示浮点型张量。它是 PyTorch 中最常用的张量类型之一，通常用于存储和处理连续数值数据。
         
        
     def __len__(self):
@@ -105,6 +105,10 @@ class MyModle(nn.Module):
             # ReLU 激活函数，引入非线性变换
 
         # 前向传播    数据处理过程
+        ## 假设 input_data 是输入张量
+        ## model = MyModel(input_dim=10)
+        ## output = model(input_data) 
+ # 这里会自动调用 forward 方法
         def forward(self, x):
             x = self.layers(x)
             x = x.squeeze(1) # 去除维度为1的维度
@@ -117,10 +121,10 @@ config = {
 'seed':5201314,
 'select_all' : True,
 'valid_ratio':0.2,
-'n_epochs' : 3000, #循环次数
+'n_epochs' : 300, #循环次数
 'batch_size' : 256,  #批次大小
 'learning_rate' : 1e-5, #学习率
-'early_stop': 400, #早停次数
+'early_stop': 40, #早停次数
 'save_path' : './models/model.ckpt'
 }
 
@@ -135,7 +139,6 @@ def trainer(train_loader, valid_loader,model,config,device):
     criterion = nn.MSELoss(reduction='mean')
     # 初始化优化器 PyTorch 中的随机梯度下降优化器（SGD），用于更新模型的参数以最小化损失函数。
     # model.parameters()`：获取模型中所有需要优化的参数。
-
     optimizer = torch.optim.SGD(model.parameters(),lr=config['learning_rate'],momentum=0.9)
     #数据可视化
     writer = SummaryWriter()
@@ -155,8 +158,10 @@ def trainer(train_loader, valid_loader,model,config,device):
     for epoch in range(n_epochs):
         model.train() # ？？
         train_loss = []
-        # train_pbar = tqdm() 进度条可视化
-        for x,y in train_loader:
+        train_bar = tqdm(train_loader,position = 0,leave = True)
+        # train_pbar = tqdm() 进度条可视化  pip install tqdm
+        #x是特征，y是标签
+        for x,y in train_bar:
             # 数据传入模型
             x,y = x.to(device),y.to(device)
             # 梯度清零
@@ -166,6 +171,7 @@ def trainer(train_loader, valid_loader,model,config,device):
             # 计算损失
             loss = criterion(y_pred,y)
             loss.backward()
+            #计算出的梯度会存储在每个模型参数的 `.grad` 属性中。这是反向传播计算的结果，用于之后的优化步骤。
             # 梯度更新
             optimizer.step()
             # 参数更新步数
@@ -173,9 +179,13 @@ def trainer(train_loader, valid_loader,model,config,device):
             # 记录损失
             train_loss.append(loss.detach().item())
             # 数据可视化
-            writer.add_scalar('Loss/train',loss.item(),step)
+            train_bar.set_description(f'Epoch [{epoch+1}/{n_epochs}]')
+            train_bar.set_postfix({'train_loss':loss.detach().item()})
+            
+            
         #平均损失    
         mean_train_loss = sum(train_loss)/len(train_loss)
+        writer.add_scalar('Loss/train',mean_train_loss,step)
         
     # 模型验证
     model.eval()
